@@ -1,0 +1,20 @@
+[package]
+name = "bellows"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "An optimizing compiler for Ash, a small statically typed language: lexer, parser, semantic analysis, three-address IR, optimizer, x86-64 code generation with DWARF line info, plus an IR interpreter. Zero dependencies."
+license = "MIT"
+repository = "https://github.com/hellpuffyt/bellows-compiler"
+keywords = ["compiler", "x86-64", "language", "ir", "optimizer"]
+categories = ["compilers", "development-tools"]
+
+[[bin]]
+name = "bellows"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1

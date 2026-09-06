@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --all-targets
+      - run: cargo test --release
+      - name: Real execution — compile and run programs natively
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          B=./target/release/bellows
+          for ex in fib fizzbuzz logic primes collatz; do
+            want=$(grep '^// expect:' examples/$ex.ash | sed 's|^// expect: *||')
+            for flags in "" "-O0" "-g"; do
+              got=$($B run examples/$ex.ash $flags | tr -d '\r')
+              [ "$got" = "$want" ] || { echo "MISMATCH $ex $flags"; echo "$got"; exit 1; }
+            done
+          done
+          echo 'fn main() { let z = 0; print(1 / z); }' > trap.ash
+          set +e; out=$($B run trap.ash); code=$?; set -e
+          [ "$code" = "101" ] && echo "$out" | grep -q "division by zero"
+          $B build examples/fib.ash --emit asm | grep -q "ash_fib:"
+          $B stats examples/collatz.ash | grep -q "folded"
+      - name: Debug info is real (DWARF line table)
+        if: runner.os == 'Linux'
+        run: |
+          ./target/release/bellows build examples/fib.ash -g -o fib_dbg
+          objdump --dwarf=decodedline fib_dbg | grep -q "fib.ash"
+      - name: Interpreter works everywhere
+        shell: bash
+        run: |
+          test "$(./target/release/bellows interp examples/fib.ash | head -1 | tr -d '\r')" = "6765"
+
+  lint:
+    name: fmt, clippy, unsafe, audit, secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - name: No unsafe, no dependencies
+        run: |
+          ! grep -rn "unsafe" src/
+          test "$(grep -c '^\[\[package\]\]' Cargo.lock)" = "1"
+      - run: cargo install cargo-audit --locked && cargo audit
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
