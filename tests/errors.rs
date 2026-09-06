@@ -4,9 +4,7 @@
 use bellows::{Options, compile, render};
 
 fn err(src: &str) -> (String, usize, usize, String) {
-    let d = compile(src, "t.ash", Options::default())
-        .err()
-        .expect("expected a diagnostic");
+    let d = compile(src, "t.ash", Options::default()).expect_err("expected a diagnostic");
     let (line, col) = bellows::diag::Source::new("t.ash", src).position(d.span.start);
     (d.code.to_string(), line, col, d.message.clone())
 }
