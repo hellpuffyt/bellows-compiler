@@ -1,8 +1,10 @@
 //! Golden tests: every `examples/*.ash` declares its expected output in
 //! `// expect:` comments. Each program is run three ways and all must
 //! agree with the expectations: interpreted at -O0, interpreted at -O1,
-//! and — when a C compiler is available — compiled to native code and
-//! executed. Native runs happen on Linux and Windows hosts.
+//! and compiled to native code and executed. The native tests only make
+//! sense where the generated x86-64 code can run (Linux and Windows on
+//! x86-64); elsewhere they are reported as ignored, never as passed. Where
+//! they do run, a missing C compiler (`gcc` or `$CC`) is a test failure.
 
 use std::path::Path;
 use std::process::Command;
@@ -33,21 +35,22 @@ fn interpret(src: &str, name: &str, optimize: bool) -> String {
     String::from_utf8(out).unwrap()
 }
 
-fn cc() -> Option<String> {
+/// The C compiler used to assemble and link; its absence is a failure.
+fn cc() -> String {
     let cc = std::env::var("CC").unwrap_or_else(|_| "gcc".into());
-    Command::new(&cc)
+    let ok = Command::new(&cc)
         .arg("--version")
         .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|_| cc)
+        .is_ok_and(|o| o.status.success());
+    assert!(
+        ok,
+        "native golden tests need a C compiler: `{cc}` not found (set CC)"
+    );
+    cc
 }
 
-fn native(src: &str, name: &str, optimize: bool) -> Option<String> {
-    let cc = cc()?;
-    if cfg!(target_os = "macos") {
-        return None; // Mach-O directives are not supported yet
-    }
+fn native(src: &str, name: &str, optimize: bool) -> String {
+    let cc = cc();
     let unit = compile(
         src,
         name,
@@ -86,7 +89,7 @@ fn native(src: &str, name: &str, optimize: bool) -> Option<String> {
         out.status,
         String::from_utf8_lossy(&out.stderr)
     );
-    Some(String::from_utf8(out.stdout).unwrap().replace("\r\n", "\n"))
+    String::from_utf8(out.stdout).unwrap().replace("\r\n", "\n")
 }
 
 fn examples() -> Vec<(String, String)> {
@@ -116,54 +119,78 @@ fn examples_match_expectations_interpreted() {
 }
 
 #[test]
+#[cfg_attr(
+    not(all(
+        target_arch = "x86_64",
+        any(target_os = "linux", target_os = "windows")
+    )),
+    ignore = "native code runs only on x86-64 Linux/Windows hosts (no Mach-O or AArch64 backend)"
+)]
 fn examples_match_expectations_native() {
-    let mut ran = 0;
-    for (name, src) in examples() {
+    let examples = examples();
+    assert!(!examples.is_empty(), "no examples found");
+    for (name, src) in examples {
         let want = expected(&src);
         for opt in [false, true] {
-            if let Some(got) = native(&src, &name, opt) {
-                assert_eq!(got, want, "{name} native at -O{}", opt as u8);
-                ran += 1;
-            }
+            let got = native(&src, &name, opt);
+            assert_eq!(got, want, "{name} native at -O{}", opt as u8);
         }
-    }
-    if ran == 0 {
-        eprintln!("no C compiler / unsupported host: native golden tests skipped");
     }
 }
 
+const TRAP_CASES: [(&str, &str); 5] = [
+    (
+        "fn main() { let z = 0; print(10 / z); }",
+        "division by zero",
+    ),
+    (
+        "fn main() { let z = 0; print(10 % z); }",
+        "division by zero",
+    ),
+    (
+        "fn big(x: i64) -> i64 { return x * 4611686018427387904; } fn main() { print(big(3)); }",
+        "integer overflow",
+    ),
+    (
+        "fn neg(x: i64) -> i64 { return -x; } fn main() { print(neg(-9223372036854775807 - 1)); }",
+        "integer overflow",
+    ),
+    (
+        "fn m(x: i64, y: i64) -> i64 { return x / y; } fn main() { print(m(-9223372036854775807 - 1, -1)); }",
+        "integer overflow",
+    ),
+];
+
 #[test]
-fn runtime_traps_agree_between_interpreter_and_native() {
-    let cases = [
-        (
-            "fn main() { let z = 0; print(10 / z); }",
-            "division by zero",
-        ),
-        (
-            "fn main() { let z = 0; print(10 % z); }",
-            "division by zero",
-        ),
-        (
-            "fn big(x: i64) -> i64 { return x * 4611686018427387904; } fn main() { print(big(3)); }",
-            "integer overflow",
-        ),
-        (
-            "fn neg(x: i64) -> i64 { return -x; } fn main() { print(neg(-9223372036854775807 - 1)); }",
-            "integer overflow",
-        ),
-        (
-            "fn m(x: i64, y: i64) -> i64 { return x / y; } fn main() { print(m(-9223372036854775807 - 1, -1)); }",
-            "integer overflow",
-        ),
-    ];
-    for (src, want) in cases {
+fn runtime_traps_in_the_interpreter() {
+    for (src, want) in TRAP_CASES {
         let unit = compile(src, "trap.ash", Options::default()).unwrap();
         let mut out = Vec::new();
         let err = bellows::ir::Interp::new(&unit.ir, &mut out)
             .run()
             .unwrap_err();
         assert_eq!(err.to_string(), want, "interpreter: {src}");
-        if let Some(cc) = cc().filter(|_| !cfg!(target_os = "macos")) {
+    }
+}
+
+#[test]
+#[cfg_attr(
+    not(all(
+        target_arch = "x86_64",
+        any(target_os = "linux", target_os = "windows")
+    )),
+    ignore = "native code runs only on x86-64 Linux/Windows hosts (no Mach-O or AArch64 backend)"
+)]
+fn runtime_traps_agree_between_interpreter_and_native() {
+    for (src, want) in TRAP_CASES {
+        let unit = compile(src, "trap.ash", Options::default()).unwrap();
+        let mut out = Vec::new();
+        let err = bellows::ir::Interp::new(&unit.ir, &mut out)
+            .run()
+            .unwrap_err();
+        assert_eq!(err.to_string(), want, "interpreter: {src}");
+        {
+            let cc = cc();
             let dir = std::env::temp_dir().join(format!("bellows-trap-{}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             let asm = dir.join("t.s");

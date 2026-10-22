@@ -8,6 +8,9 @@
 //! bellows stats  prog.ash               optimizer statistics
 //! ```
 
+#![forbid(unsafe_code)]
+
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
@@ -42,7 +45,8 @@ fn parse_args(rest: &[String]) -> Args {
         opts: Options::default(),
         emit: None,
         cc: std::env::var("CC").unwrap_or_else(|_| "gcc".into()),
-        color: std::env::var_os("NO_COLOR").is_none(),
+        // Colour only when a person is reading: diagnostics go to stderr.
+        color: std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal(),
     };
     let mut i = 0;
     while i < rest.len() {
@@ -116,7 +120,32 @@ fn link(a: &Args, asm: &str, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `run` executes the generated code on this machine, which is only possible
+/// on x86-64 Linux/Windows hosts and only for the host's own target.
+fn host_can_run(target: Target) -> bool {
+    cfg!(all(
+        target_arch = "x86_64",
+        any(target_os = "linux", target_os = "windows")
+    )) && target == Target::host()
+}
+
+/// Stack for the compiler thread. The parser bounds nesting
+/// (`parser::MAX_NESTING`, `parser::MAX_EXPR_DEPTH`), and every recursive
+/// pass fits comfortably in this at those limits, even in a debug build.
+const COMPILER_STACK: usize = 64 << 20;
+
 fn main() -> ExitCode {
+    match std::thread::Builder::new()
+        .name("bellows".into())
+        .stack_size(COMPILER_STACK)
+        .spawn(real_main)
+    {
+        Ok(h) => h.join().unwrap_or(ExitCode::from(101)),
+        Err(_) => real_main(),
+    }
+}
+
+fn real_main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = argv.first() else { usage() };
     let a = parse_args(&argv[1..]);
@@ -179,6 +208,13 @@ fn main() -> ExitCode {
                     )),
                 }
                 return ExitCode::SUCCESS;
+            }
+            if cmd == "run" && !host_can_run(a.opts.target) {
+                die(
+                    "`bellows run` executes x86-64 Linux/Windows code natively and cannot do so \
+                     on this host/target; use `bellows interp FILE.ash`, or \
+                     `bellows build --target linux|windows --cc <cross C compiler>`",
+                );
             }
             let default_out = {
                 let stem = Path::new(&a.file)
