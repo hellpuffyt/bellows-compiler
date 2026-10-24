@@ -12,6 +12,8 @@
 //! assert_eq!(String::from_utf8(out).unwrap(), "0\n1\n4\n");
 //! ```
 
+#![forbid(unsafe_code)]
+
 pub mod codegen;
 pub mod diag;
 pub mod ir;

@@ -2,7 +2,7 @@
 
 ## Ground rules
 
-- Zero dependencies, zero `unsafe`. CI fails on either.
+- Zero dependencies, zero `unsafe` (`#![forbid(unsafe_code)]`). CI fails on either.
 - **Both backends must agree.** Any change to semantics touches `ir::eval`
   (used by the interpreter *and* the constant folder) and `codegen.rs`, and
   gets a golden example that runs through both.

@@ -65,6 +65,13 @@ Precedence from lowest to highest:
 
 Integer literals may use `_` separators and must fit in `i64`.
 
+Nesting is bounded so that hostile input cannot crash the compiler: at most
+64 levels of blocks, parentheses, unary operators, call arguments and
+`else if` arms combined, and expression trees at most 256 deep (a chain
+`a + b + … ` of 256 operands is the longest single expression). Exceeding
+either is error E002 with a note suggesting `let` statements or a helper
+function.
+
 ## Runtime errors
 
 These terminate the program with exit code 101 and a message on stdout
@@ -74,7 +81,8 @@ These terminate the program with exit code 101 and a message on stdout
 - `division by zero` — from `/` or `%`
 
 Deep recursion exhausts the machine stack in native code (a crash); the
-interpreter reports `stack overflow (call depth limit)`.
+interpreter reports `stack overflow (call depth limit)` after 100,000 nested
+calls (its frames live on the heap, not the host stack).
 
 ## Diagnostics
 

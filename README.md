@@ -5,30 +5,38 @@ language — from source text to x86-64 machine code, with an IR interpreter
 that must agree with the native binary on every program.**
 
 ```
-$ cat examples/fib.ash
+$ sed -n '6,11p' examples/fib.ash
 fn fib(n: i64) -> i64 {
-    if n < 2 { return n; }
+    if n < 2 {
+        return n;
+    }
     return fib(n - 1) + fib(n - 2);
 }
-fn main() { print(fib(20)); }
 
+$ bellows interp examples/fib.ash       # through the IR interpreter (any host)
+6765
+6765
+true
 $ bellows run examples/fib.ash          # compile → gcc assembles/links → execute
-6765
-$ bellows interp examples/fib.ash       # same program through the IR interpreter
-6765
+6765                                    # (x86-64 Linux/Windows; CI diffs this
+6765                                    #  against the interpreter's output)
+true
 $ bellows build examples/fib.ash --emit ir | head -8
-fn fib(params=1, slots=1, temps=6) {
+fn fib(params=1, slots=1, temps=10) {
   b0:
     %t0 = load s0
     %t1 = lt %t0, 2
     br %t1, b1, b2
   b1:
-    ret %t0
-  ...
+    %t2 = load s0
+    ret %t2
 ```
 
-Zero dependencies, ~2,600 lines of Rust. Runs on Linux and Windows
-(MinGW); the interpreter runs anywhere.
+Zero dependencies, ~3,000 lines of Rust in `src/` (non-blank,
+non-comment). Native code generation targets x86-64 Linux and Windows
+(MinGW); the interpreter runs anywhere, including
+macOS, where `bellows run` refuses with a pointer to `bellows interp`
+(there is no Mach-O or AArch64 backend).
 
 ## What is it?
 
@@ -36,16 +44,17 @@ Zero dependencies, ~2,600 lines of Rust. Runs on Linux and Windows
 |---|---|---|
 | Lexer | `lexer.rs` | Tokens with byte spans; nested block comments, string escapes, `1_000` literals; every malformed input is a spanned error |
 | Parser | `parser.rs` | Recursive descent with precedence climbing → AST; `else if` chains; every expression gets an id for the type table |
-| Semantic analysis | `sema.rs` | Scopes, types (`i64`, `bool`, `()`), mutability, arity, `main` contract, **missing-return analysis**, unreachable code, useless expressions; 20 diagnostic codes |
+| Semantic analysis | `sema.rs` | Scopes, types (`i64`, `bool`, `()`), mutability, arity, `main` contract, **missing-return analysis**, unreachable code, useless expressions; 13 diagnostic codes (E001–E002, E010–E020) |
 | IR | `ir.rs` | Three-address code over basic blocks: single-assignment temps, numbered local slots, `br`/`jmp`/`ret`, short-circuit lowering; a printer and an **interpreter** |
 | Optimizer | `opt.rs` | Constant folding + propagation, algebraic identities, store→load forwarding, dead temps, dead stores, branch folding, jump threading, block merging, unreachable-block removal — to a fixpoint |
 | Code generator | `codegen.rs` | x86-64 AT&T assembly for System V (Linux) and MS x64 (Windows); **checked arithmetic that traps** like the interpreter; DWARF `.loc` line info with `-g` |
 | Diagnostics | `diag.rs` | rustc-style rendering: code, message, `file:line:col`, source line, caret, label, notes; colour when a terminal |
 
 ```
-$ bellows check examples/bad.ash
+$ printf 'fn main() {\n    let x: bool = 3;\n}\n' > bad.ash
+$ bellows check bad.ash
 error[E011]: type mismatch: `x` is declared `bool` but initialised with `i64`
-  --> examples/bad.ash:2:19
+  --> bad.ash:2:19
    |
  2 |     let x: bool = 3;
    |                   ^ this has type `i64`
@@ -107,6 +116,12 @@ arithmetic loop), Windows 11 laptop, one run each:
 | Interpreter, -O0 | 595 ms |
 | Compile `collatz.ash` (all stages, no linking) | 14 ms |
 
+These figures predate the 2026-10 change that moved interpreter calls onto
+an explicit frame stack (so deep Ash recursion traps instead of crashing the
+compiler); on an Apple M-series Mac that change measured roughly 15% slower
+on `bellows interp examples/bench.ash`. The table has not been re-measured
+on the original Windows machine.
+
 Honest reading: the code generator keeps every value in the stack frame
 ("spill everything"), so native code is only marginally faster than the
 interpreter today. Register allocation is the first roadmap item, and the
@@ -116,8 +131,9 @@ tests are in place to make it safe.
 
 ```
 cargo build --release                  # target/release/bellows
-cargo test                             # golden, errors, optimizer, fuzz (17 tests)
-bellows run    examples/primes.ash     # needs gcc (or CC=clang on Linux)
+cargo install --path .                 # optional: puts `bellows` on PATH
+cargo test                             # 33 tests; 2 native ones need x86-64 Linux/Windows + gcc
+bellows run    examples/primes.ash     # x86-64 Linux/Windows only; needs gcc (or CC=clang on Linux)
 bellows interp examples/primes.ash     # no toolchain needed
 bellows build  examples/fib.ash -o fib [-O0] [-g] [--target linux|windows]
 bellows build  examples/fib.ash --emit asm

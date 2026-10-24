@@ -146,7 +146,7 @@ fn mutated_programs_agree_between_optimization_levels() {
             let mut m = toks.clone();
             let k = (rng.next() % m.len() as u64) as usize;
             m[k] = rng.pick(ATOMS);
-            if rng.next() % 3 == 0 {
+            if rng.next().is_multiple_of(3) {
                 let j = (rng.next() % m.len() as u64) as usize;
                 m[j] = rng.pick(&["1", "0", "-1", "2", "x", "i"]);
             }

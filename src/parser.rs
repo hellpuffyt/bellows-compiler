@@ -169,10 +169,23 @@ pub struct Program {
     pub expr_count: usize,
 }
 
+/// Maximum syntactic nesting of blocks, parentheses, unary operators and
+/// call arguments. Every later pass walks the AST recursively, so without a
+/// bound a hostile file (`((((…1…))))`) overflows the compiler's stack.
+pub const MAX_NESTING: usize = 64;
+
+/// Maximum height of one expression tree, which also bounds long
+/// left-associative chains such as `1 + 1 + … + 1`.
+pub const MAX_EXPR_DEPTH: u32 = 256;
+
 struct Parser<'t> {
     toks: &'t [Token],
     pos: usize,
     next_id: usize,
+    /// Current syntactic nesting depth (see [`MAX_NESTING`]).
+    nest: usize,
+    /// Height of every expression built so far, indexed by expression id.
+    heights: Vec<u32>,
 }
 
 impl<'t> Parser<'t> {
@@ -224,10 +237,44 @@ impl<'t> Parser<'t> {
             )),
         }
     }
-    fn expr_id(&mut self) -> usize {
+    /// Builds an expression node of the given tree height, enforcing
+    /// [`MAX_EXPR_DEPTH`].
+    fn node(&mut self, kind: ExprKind, span: Span, height: u32) -> Result<Expr> {
+        if height > MAX_EXPR_DEPTH {
+            return Err(Diagnostic::new(
+                "E002",
+                span,
+                format!("expression is nested too deeply (limit {MAX_EXPR_DEPTH})"),
+            )
+            .note("split it into several `let` statements"));
+        }
         let id = self.next_id;
         self.next_id += 1;
-        id
+        debug_assert_eq!(self.heights.len(), id);
+        self.heights.push(height);
+        Ok(Expr { id, kind, span })
+    }
+
+    fn height(&self, e: &Expr) -> u32 {
+        self.heights[e.id]
+    }
+
+    /// Enters one level of syntactic nesting, enforcing [`MAX_NESTING`].
+    fn enter(&mut self) -> Result<()> {
+        self.nest += 1;
+        if self.nest > MAX_NESTING {
+            return Err(Diagnostic::new(
+                "E002",
+                self.peek_span(),
+                format!("code is nested too deeply (limit {MAX_NESTING} levels)"),
+            )
+            .note("move the inner part into a separate function"));
+        }
+        Ok(())
+    }
+
+    fn leave(&mut self) {
+        self.nest -= 1;
     }
 
     fn program(&mut self) -> Result<Program> {
@@ -302,6 +349,13 @@ impl<'t> Parser<'t> {
     }
 
     fn block(&mut self) -> Result<Block> {
+        self.enter()?;
+        let b = self.block_inner();
+        self.leave();
+        b
+    }
+
+    fn block_inner(&mut self) -> Result<Block> {
         let start = self.expect(Tok::LBrace, "`{`")?.span;
         let mut stmts = Vec::new();
         while !self.at(&Tok::RBrace) {
@@ -367,7 +421,9 @@ impl<'t> Parser<'t> {
                 let then = self.block()?;
                 let els = if self.eat(&Tok::Else) {
                     if self.at(&Tok::If) {
+                        self.enter()?;
                         let s = self.stmt()?;
+                        self.leave();
                         Some(Block {
                             span: s.span,
                             stmts: vec![s],
@@ -463,11 +519,12 @@ impl<'t> Parser<'t> {
             self.bump();
             let rhs = self.binary(prec + 1)?;
             let span = lhs.span.to(rhs.span);
-            lhs = Expr {
-                id: self.expr_id(),
-                kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)),
+            let height = 1 + self.height(&lhs).max(self.height(&rhs));
+            lhs = self.node(
+                ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)),
                 span,
-            };
+                height,
+            )?;
         }
     }
 
@@ -480,13 +537,12 @@ impl<'t> Parser<'t> {
         };
         if let Some(op) = op {
             self.bump();
+            self.enter()?;
             let inner = self.unary()?;
+            self.leave();
             let span = start.to(inner.span);
-            return Ok(Expr {
-                id: self.expr_id(),
-                kind: ExprKind::Unary(op, Box::new(inner)),
-                span,
-            });
+            let height = 1 + self.height(&inner);
+            return self.node(ExprKind::Unary(op, Box::new(inner)), span, height);
         }
         self.primary()
     }
@@ -499,7 +555,9 @@ impl<'t> Parser<'t> {
             Tok::False => ExprKind::Bool(false),
             Tok::Str(s) => ExprKind::Str(s),
             Tok::LParen => {
+                self.enter()?;
                 let e = self.expr()?;
+                self.leave();
                 self.expect(Tok::RParen, "`)`")?;
                 return Ok(e);
             }
@@ -507,19 +565,18 @@ impl<'t> Parser<'t> {
                 if self.eat(&Tok::LParen) {
                     let mut args = Vec::new();
                     if !self.at(&Tok::RParen) {
+                        self.enter()?;
                         loop {
                             args.push(self.expr()?);
                             if !self.eat(&Tok::Comma) {
                                 break;
                             }
                         }
+                        self.leave();
                     }
                     let end = self.expect(Tok::RParen, "`)` after arguments")?.span;
-                    return Ok(Expr {
-                        id: self.expr_id(),
-                        kind: ExprKind::Call(name, args),
-                        span: t.span.to(end),
-                    });
+                    let height = 1 + args.iter().map(|a| self.height(a)).max().unwrap_or(0);
+                    return self.node(ExprKind::Call(name, args), t.span.to(end), height);
                 }
                 ExprKind::Var(name)
             }
@@ -531,11 +588,7 @@ impl<'t> Parser<'t> {
                 ));
             }
         };
-        Ok(Expr {
-            id: self.expr_id(),
-            kind,
-            span: t.span,
-        })
+        self.node(kind, t.span, 1)
     }
 }
 
@@ -544,6 +597,8 @@ pub fn parse(toks: &[Token]) -> Result<Program> {
         toks,
         pos: 0,
         next_id: 0,
+        nest: 0,
+        heights: Vec::new(),
     };
     p.program()
 }

@@ -517,75 +517,136 @@ impl<'a, W: Write> Interp<'a, W> {
         self.call(self.prog.main, &[]).map(|_| ())
     }
 
+    /// Executes `fi` with `args` and returns its result.
+    ///
+    /// Ash calls are kept on an explicit frame stack rather than on the Rust
+    /// call stack, so the depth limit (`max_depth`) is what bounds recursion:
+    /// a deeply recursive Ash program gets `Trap::StackOverflow` instead of
+    /// overflowing the host thread's stack, whatever that stack's size is.
     fn call(&mut self, fi: usize, args: &[i64]) -> Result<i64, Trap> {
-        self.depth += 1;
-        if self.depth > self.max_depth {
-            return Err(Trap::StackOverflow);
-        }
-        let f = &self.prog.funcs[fi];
-        let mut slots = vec![0i64; f.slots as usize];
-        slots[..args.len()].copy_from_slice(args);
-        let mut temps = vec![0i64; f.temps as usize];
-        let mut b = 0usize;
+        let prog = self.prog;
+        let base = self.depth;
+        let mut frames: Vec<Frame<'a>> = Vec::new();
+        self.push_frame(&mut frames, fi, args, None)?;
         let val = |o: Operand, temps: &[i64]| match o {
             Operand::Temp(t) => temps[t as usize],
             Operand::Const(c) => c,
         };
         loop {
-            let blk = &f.blocks[b];
-            for ins in &blk.instrs {
+            let Some(fr) = frames.last_mut() else {
+                unreachable!("frame stack is never empty inside the loop")
+            };
+            let func: &'a Func = fr.func;
+            let blk = &func.blocks[fr.block];
+            let start = fr.pc;
+            let (slots, temps) = (&mut fr.slots[..], &mut fr.temps[..]);
+            let mut call = None;
+            for (k, ins) in blk.instrs[start..].iter().enumerate() {
                 self.steps += 1;
                 if self.steps > self.max_steps {
                     return Err(Trap::StepLimit);
                 }
                 match ins {
                     Instr::Load { dst, slot } => temps[*dst as usize] = slots[*slot as usize],
-                    Instr::Store { slot, src } => slots[*slot as usize] = val(*src, &temps),
+                    Instr::Store { slot, src } => slots[*slot as usize] = val(*src, temps),
                     Instr::Bin { dst, op, a, b } => {
-                        let (x, y) = (val(*a, &temps), val(*b, &temps));
+                        let (x, y) = (val(*a, temps), val(*b, temps));
                         temps[*dst as usize] = eval(*op, x, y)?;
                     }
                     Instr::Neg { dst, a } => {
-                        temps[*dst as usize] =
-                            val(*a, &temps).checked_neg().ok_or(Trap::Overflow)?
+                        temps[*dst as usize] = val(*a, temps).checked_neg().ok_or(Trap::Overflow)?
                     }
-                    Instr::Not { dst, a } => temps[*dst as usize] = i64::from(val(*a, &temps) == 0),
+                    Instr::Not { dst, a } => temps[*dst as usize] = i64::from(val(*a, temps) == 0),
                     Instr::Call { dst, func, args } => {
-                        let argv: Vec<i64> = args.iter().map(|a| val(*a, &temps)).collect();
-                        let r = self.call(*func, &argv)?;
-                        if let Some(d) = dst {
-                            temps[*d as usize] = r;
-                        }
+                        let argv: Vec<i64> = args.iter().map(|a| val(*a, temps)).collect();
+                        call = Some((*func, argv, *dst, start + k + 1));
+                        break;
                     }
                     Instr::PrintInt(v) => {
-                        writeln!(self.out, "{}", val(*v, &temps)).map_err(|_| Trap::Io)?
+                        writeln!(self.out, "{}", val(*v, temps)).map_err(|_| Trap::Io)?
                     }
                     Instr::PrintBool(v) => {
-                        writeln!(self.out, "{}", val(*v, &temps) != 0).map_err(|_| Trap::Io)?
+                        writeln!(self.out, "{}", val(*v, temps) != 0).map_err(|_| Trap::Io)?
                     }
                     Instr::PrintStr(i) => {
-                        writeln!(self.out, "{}", self.prog.strings[*i]).map_err(|_| Trap::Io)?
+                        writeln!(self.out, "{}", prog.strings[*i]).map_err(|_| Trap::Io)?
                     }
                 }
             }
+            if let Some((callee, argv, dst, resume)) = call {
+                fr.pc = resume;
+                self.push_frame(&mut frames, callee, &argv, dst)?;
+                continue;
+            }
             self.steps += 1;
             match &blk.term {
-                Term::Jmp(t) => b = *t as usize,
+                Term::Jmp(t) => (fr.block, fr.pc) = (*t as usize, 0),
                 Term::Br { cond, t, f: fb } => {
-                    b = if val(*cond, &temps) != 0 {
+                    fr.block = if val(*cond, &fr.temps) != 0 {
                         *t as usize
                     } else {
                         *fb as usize
-                    }
+                    };
+                    fr.pc = 0;
                 }
                 Term::Ret(v) => {
+                    let r = v.map_or(0, |v| val(v, &fr.temps));
+                    let ret_dst = fr.ret_dst;
+                    frames.pop();
                     self.depth -= 1;
-                    return Ok(v.map_or(0, |v| val(v, &temps)));
+                    match frames.last_mut() {
+                        None => {
+                            debug_assert_eq!(self.depth, base);
+                            return Ok(r);
+                        }
+                        Some(caller) => {
+                            if let Some(d) = ret_dst {
+                                caller.temps[d as usize] = r;
+                            }
+                        }
+                    }
                 }
                 Term::None => unreachable!("unterminated block"),
             }
         }
     }
+
+    fn push_frame(
+        &mut self,
+        frames: &mut Vec<Frame<'a>>,
+        fi: usize,
+        args: &[i64],
+        ret_dst: Option<u32>,
+    ) -> Result<(), Trap> {
+        self.depth += 1;
+        if self.depth > self.max_depth {
+            return Err(Trap::StackOverflow);
+        }
+        let func = &self.prog.funcs[fi];
+        let mut slots = vec![0i64; func.slots as usize];
+        slots[..args.len()].copy_from_slice(args);
+        frames.push(Frame {
+            func,
+            slots,
+            temps: vec![0i64; func.temps as usize],
+            block: 0,
+            pc: 0,
+            ret_dst,
+        });
+        Ok(())
+    }
+}
+
+/// One activation of an Ash function in the interpreter.
+struct Frame<'a> {
+    func: &'a Func,
+    slots: Vec<i64>,
+    temps: Vec<i64>,
+    block: usize,
+    /// Index of the next instruction in `block` (== len means the terminator).
+    pc: usize,
+    /// Caller temp that receives the return value.
+    ret_dst: Option<u32>,
 }
 
 /// Shared by the interpreter and the constant folder, so folding can never
