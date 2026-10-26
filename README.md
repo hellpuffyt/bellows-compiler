@@ -7,7 +7,65 @@ the native binary prints.
 
 [Case study ↗](https://hellpuff.dev/work/bellows-compiler)
 
-<img src="docs/assets/overview.svg" width="100%" alt="Bellows pipeline: prog.ash goes through lexer.rs, parser.rs, sema.rs, ir.rs lowering and opt.rs. Front-end errors are rendered by diag.rs. The optimized IR goes either to the ir.rs interpreter, which runs on any host, or to codegen.rs, whose x86-64 assembly gcc links into an executable on x86-64 Linux or Windows. tests/golden.rs requires both to print the same output at -O0 and -O1.">
+## Demo
+
+<img src="docs/screenshots/bellows-interp-ir-stats-type-error.png" width="100%" alt="Terminal capture on macOS: bellows interp examples/fib.ash prints 6765, 6765, true; --emit ir shows the three-address IR for fib; stats reports the optimizer counters; check on a small file reports error E011 with a caret under the bool argument">
+
+Terminal capture of a real run on an arm64 Mac, where only the interpreter and the
+front end run (native `run` needs x86-64 Linux or Windows, see [Platforms](#platforms)).
+`typo.ash` is a throwaway file that passes a `bool` to an `i64` parameter:
+
+```
+fn half(n: i64) -> i64 {
+    return n / 2;
+}
+
+fn main() {
+    let ready = true;
+    print(half(ready));
+}
+```
+
+<details>
+<summary>Same output as text</summary>
+
+```console
+$ bellows interp examples/fib.ash
+6765
+6765
+true
+
+$ bellows build examples/fib.ash --emit ir | head -16
+fn fib(params=1, slots=1, temps=10) {
+  b0:
+    %t0 = load s0
+    %t1 = lt %t0, 2
+    br %t1, b1, b2
+  b1:
+    %t2 = load s0
+    ret %t2
+  b2:
+    %t3 = load s0
+    %t4 = sub %t3, 1
+    %t5 = call fib(%t4)
+    %t7 = sub %t3, 2
+    %t8 = call fib(%t7)
+    %t9 = add %t5, %t8
+    ret %t9
+
+$ bellows stats examples/fib.ash
+functions 3  blocks 8  instructions 40
+folded 0  forwarded 3  dead temps 0  dead stores 1  branches folded 0  jumps threaded 1  blocks removed 1
+
+$ bellows check typo.ash
+error[E011]: type mismatch: parameter is `i64`, argument is `bool`
+  --> typo.ash:7:16
+   |
+ 7 |     print(half(ready));
+   |                ^^^^^ this has type `bool`
+```
+
+</details>
 
 ```
 $ sed -n '6,11p' examples/fib.ash
@@ -42,6 +100,10 @@ non-blank, non-comment lines in `src/`. Each pass is a few hundred lines, so
 the whole pipeline can be read in a sitting.
 
 ## Pipeline
+
+<img src="docs/assets/overview.svg" width="100%" alt="Bellows pipeline: prog.ash goes through lexer.rs, parser.rs, sema.rs, ir.rs lowering and opt.rs. Front-end errors are rendered by diag.rs. The optimized IR goes either to the ir.rs interpreter, which runs on any host, or to codegen.rs, whose x86-64 assembly gcc links into an executable on x86-64 Linux or Windows. tests/golden.rs requires both to print the same output at -O0 and -O1.">
+
+Diagram (not a screenshot): the passes from source to the interpreter or to native code.
 
 | Stage | File | What it does |
 |---|---|---|
