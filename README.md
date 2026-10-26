@@ -1,8 +1,13 @@
 # Bellows
 
-**An optimizing compiler you can read end to end — for Ash, a small typed
-language — from source text to x86-64 machine code, with an IR interpreter
-that must agree with the native binary on every program.**
+A compiler for Ash, a small statically typed language. It takes source text
+through a lexer, parser, type checker, three-address IR and optimizer to
+x86-64 assembly, and it has an IR interpreter that has to print exactly what
+the native binary prints.
+
+[Case study ↗](https://hellpuff.dev/work/bellows-compiler)
+
+<img src="docs/assets/overview.svg" width="100%" alt="Bellows pipeline: prog.ash goes through lexer.rs, parser.rs, sema.rs, ir.rs lowering and opt.rs. Front-end errors are rendered by diag.rs. The optimized IR goes either to the ir.rs interpreter, which runs on any host, or to codegen.rs, whose x86-64 assembly gcc links into an executable on x86-64 Linux or Windows. tests/golden.rs requires both to print the same output at -O0 and -O1.">
 
 ```
 $ sed -n '6,11p' examples/fib.ash
@@ -32,23 +37,28 @@ fn fib(params=1, slots=1, temps=10) {
     ret %t2
 ```
 
-Zero dependencies, ~3,000 lines of Rust in `src/` (non-blank,
-non-comment). Native code generation targets x86-64 Linux and Windows
-(MinGW); the interpreter runs anywhere, including
-macOS, where `bellows run` refuses with a pointer to `bellows interp`
-(there is no Mach-O or AArch64 backend).
+Version 0.1.0. One crate, no dependencies, no `unsafe`, about 3,000
+non-blank, non-comment lines in `src/`. Each pass is a few hundred lines, so
+the whole pipeline can be read in a sitting.
 
-## What is it?
+## Pipeline
 
 | Stage | File | What it does |
 |---|---|---|
 | Lexer | `lexer.rs` | Tokens with byte spans; nested block comments, string escapes, `1_000` literals; every malformed input is a spanned error |
 | Parser | `parser.rs` | Recursive descent with precedence climbing → AST; `else if` chains; every expression gets an id for the type table |
-| Semantic analysis | `sema.rs` | Scopes, types (`i64`, `bool`, `()`), mutability, arity, `main` contract, **missing-return analysis**, unreachable code, useless expressions; 13 diagnostic codes (E001–E002, E010–E020) |
-| IR | `ir.rs` | Three-address code over basic blocks: single-assignment temps, numbered local slots, `br`/`jmp`/`ret`, short-circuit lowering; a printer and an **interpreter** |
-| Optimizer | `opt.rs` | Constant folding + propagation, algebraic identities, store→load forwarding, dead temps, dead stores, branch folding, jump threading, block merging, unreachable-block removal — to a fixpoint |
-| Code generator | `codegen.rs` | x86-64 AT&T assembly for System V (Linux) and MS x64 (Windows); **checked arithmetic that traps** like the interpreter; DWARF `.loc` line info with `-g` |
-| Diagnostics | `diag.rs` | rustc-style rendering: code, message, `file:line:col`, source line, caret, label, notes; colour when a terminal |
+| Semantic analysis | `sema.rs` | Scopes, types (`i64`, `bool`, `()`), mutability, arity, `main` contract, missing-return analysis, unreachable code, useless expressions; 13 diagnostic codes (E001–E002, E010–E020) |
+| IR | `ir.rs` | Three-address code over basic blocks: single-assignment temps, numbered local slots, `br`/`jmp`/`ret`, short-circuit lowering; a printer and an interpreter |
+| Optimizer | `opt.rs` | Constant folding and propagation, algebraic identities, store→load forwarding, dead temps, dead stores, branch folding, jump threading, block merging, unreachable-block removal, repeated to a fixpoint. Skipped at `-O0` |
+| Code generator | `codegen.rs` | x86-64 AT&T assembly for System V (Linux) and MS x64 (Windows); checked arithmetic that traps like the interpreter; DWARF `.loc` line info with `-g` |
+| Diagnostics | `diag.rs` | rustc-style rendering: code, message, `file:line:col`, source line, caret, label, notes; colour when stdout is a terminal |
+
+`lib.rs::compile` runs the stages in order and keeps every intermediate form
+in a `Unit`, which is how `--emit tokens|ast|ir|asm` can print any of them.
+[`ARCHITECTURE.md`](ARCHITECTURE.md) covers the IR invariants, each
+optimizer pass and the calling convention.
+
+The first diagnostic stops the pipeline:
 
 ```
 $ printf 'fn main() {\n    let x: bool = 3;\n}\n' > bad.ash
@@ -60,87 +70,10 @@ error[E011]: type mismatch: `x` is declared `bool` but initialised with `i64`
    |                   ^ this has type `i64`
 ```
 
-## Who is it for?
+Some diagnostics add a note with the likely fix, for example
+``declare it with `let mut x` to allow assignment``.
 
-- People **learning how compilers work** who want every stage in one small
-  codebase with tests that show what each stage guarantees.
-- People **teaching** compilers: `--emit tokens|ast|ir|asm` prints each
-  intermediate form; `stats` prints what the optimizer did.
-- Anyone who wants a **worked example of "the optimizer must not change
-  behaviour"** — every example runs at -O0 and -O1, interpreted and native,
-  and all four outputs must match.
-
-## Why does it exist?
-
-Real compilers are too large to read, and tutorial compilers stop at the
-first thing that prints `42` — no type checker with real diagnostics, no
-optimizer, no proof that optimization preserved semantics, no runtime
-traps. Bellows is the middle ground: a complete pipeline where each pass is
-a few hundred lines, and where correctness is *tested* rather than assumed.
-
-## What makes it different?
-
-- **Two backends that must agree.** The IR interpreter and the native code
-  share one arithmetic definition (`ir::eval`), and the golden tests run
-  every example through both at both optimization levels.
-- **Traps are part of the language.** Integer overflow and division by zero
-  are runtime errors (exit code 101) — in native code via `jo`/`jz` checks,
-  in the interpreter via checked arithmetic. The optimizer never folds a
-  trapping operation away.
-- **Diagnostics with a caret**, a label, and notes that suggest the fix
-  (`declare it with let mut x`, `call it with f(...)`).
-- **The optimizer is observable**: `bellows stats` reports folds, forwards,
-  dead code and threaded jumps; `tests/opt.rs` checks IR shape *and*
-  behavioural equivalence *and* that fewer instructions execute.
-- **DWARF line info** in one flag (`-g`): step through Ash source in gdb.
-
-## Why is this not just a tutorial?
-
-Because the failure modes are covered: 36 negative tests pin the exact
-`line:col` of every diagnostic; a deterministic fuzzer feeds 30,000 token
-soups and 5,000 random byte strings through the pipeline and mutates valid
-programs to check -O0/-O1 agreement; the golden suite compiles and runs
-every example natively on Linux and Windows in CI; overflow, `MIN / -1`,
-`MIN % -1` and division by zero each have a test in both backends.
-
-## Benchmarks
-
-`examples/bench.ash` (recursive `fib(30)` + a 10-million-iteration
-arithmetic loop), Windows 11 laptop, one run each:
-
-| Configuration | Time |
-|---|---|
-| Native, -O1 | 500 ms |
-| Native, -O0 | 500 ms |
-| Interpreter, -O1 | 534 ms |
-| Interpreter, -O0 | 595 ms |
-| Compile `collatz.ash` (all stages, no linking) | 14 ms |
-
-These figures predate the 2026-10 change that moved interpreter calls onto
-an explicit frame stack (so deep Ash recursion traps instead of crashing the
-compiler); on an Apple M-series Mac that change measured roughly 15% slower
-on `bellows interp examples/bench.ash`. The table has not been re-measured
-on the original Windows machine.
-
-Honest reading: the code generator keeps every value in the stack frame
-("spill everything"), so native code is only marginally faster than the
-interpreter today. Register allocation is the first roadmap item, and the
-tests are in place to make it safe.
-
-## Build, test, run
-
-```
-cargo build --release                  # target/release/bellows
-cargo install --path .                 # optional: puts `bellows` on PATH
-cargo test                             # 33 tests; 2 native ones need x86-64 Linux/Windows + gcc
-bellows run    examples/primes.ash     # x86-64 Linux/Windows only; needs gcc (or CC=clang on Linux)
-bellows interp examples/primes.ash     # no toolchain needed
-bellows build  examples/fib.ash -o fib [-O0] [-g] [--target linux|windows]
-bellows build  examples/fib.ash --emit asm
-bellows stats  examples/collatz.ash
-```
-
-## The Ash language in one screen
+## The Ash language
 
 ```
 fn gcd(a: i64, b: i64) -> i64 {       // i64 and bool; functions must return on every path
@@ -158,20 +91,141 @@ fn main() {
 }
 ```
 
-Full reference: [`docs/LANGUAGE.md`](docs/LANGUAGE.md).
+Types are `i64`, `bool` and `()`, with no implicit conversions. There are no
+arrays, no string type beyond literals passed to `print`, and no input. Full
+reference: [`docs/LANGUAGE.md`](docs/LANGUAGE.md).
 
-## Documentation
+## Execution model
 
-- [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — syntax, types, semantics, traps, diagnostics
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — each stage, the IR, the optimizer's invariants, the calling convention
-- [`SECURITY.md`](SECURITY.md), [`TESTING.md`](TESTING.md), [`ROADMAP.md`](ROADMAP.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`CHANGELOG.md`](CHANGELOG.md)
+There are two ways to run a program, and they are meant to be
+interchangeable:
 
-## Why star or contribute?
+- `bellows interp` runs the optimized IR in `ir::Interp`. It works on any
+  host. Calls use an explicit frame stack on the heap, so very deep Ash
+  recursion ends in a stack-overflow trap instead of crashing the compiler.
+- `bellows run` and `bellows build` generate assembly, then call `gcc` (or
+  the compiler named by `--cc` or `$CC`) to assemble it and link it against
+  libc (`printf`, `puts`, `exit`).
 
-Star it if you want a compiler small enough to understand and honest enough
-to test itself. Contribute a register allocator, a new type, arrays, an
-ARM64 backend, or an LSP — each is a scoped project against a pipeline that
-tells you immediately when you broke something.
+Integer overflow, division by zero, `MIN / -1` and `MIN % -1` are runtime
+errors. Both backends print the same message and exit with status 101: the
+interpreter through checked arithmetic in `ir::eval`, native code through
+`jo`/`jz` checks. The constant folder also goes through `ir::eval`, so it
+never folds a trapping operation away.
+
+The code generator keeps every value in the stack frame and does no register
+allocation, so native code is currently only a little faster than the
+interpreter (see the benchmarks below). Register allocation is the first item
+in [`ROADMAP.md`](ROADMAP.md).
+
+## Platforms
+
+| Host | `check`, `interp`, `stats`, `--emit` | `run`, `build -o` |
+|---|---|---|
+| x86-64 Linux (`gcc` or `$CC`) | yes | yes |
+| x86-64 Windows (MinGW `gcc`) | yes | yes |
+| macOS, or any AArch64 host | yes | no: there is no Mach-O or AArch64 backend |
+
+On macOS `bellows run` refuses and points to `bellows interp`.
+`bellows build -o` on macOS hands Linux-style assembly to the host
+compiler, which rejects it; use `--emit asm`, or pass a cross compiler with
+`--cc` together with `--target linux|windows`.
+
+Building needs Rust 1.88 or newer (edition 2024).
+
+## Build and run
+
+```
+cargo build --release                  # target/release/bellows
+cargo install --path .                 # optional: puts `bellows` on PATH
+bellows interp examples/primes.ash     # no C toolchain needed
+bellows run    examples/primes.ash     # x86-64 Linux/Windows only; needs gcc (or --cc / $CC)
+bellows build  examples/fib.ash -o fib [-O0] [-g] [--target linux|windows] [--cc CC]
+bellows build  examples/fib.ash --emit asm
+bellows stats  examples/collatz.ash
+```
+
+`bellows stats` reports what the optimizer did:
+
+```
+$ bellows stats examples/collatz.ash
+functions 2  blocks 14  instructions 57
+folded 0  forwarded 1  dead temps 0  dead stores 0  branches folded 0  jumps threaded 4  blocks removed 3
+```
+
+## Using it as a library
+
+```rust
+let src = "fn main() { let mut i = 0; while i < 3 { print(i * i); i = i + 1; } }";
+let unit = bellows::compile(src, "demo.ash", bellows::Options::default()).unwrap();
+let mut out = Vec::new();
+bellows::ir::Interp::new(&unit.ir, &mut out).run().unwrap();
+assert_eq!(String::from_utf8(out).unwrap(), "0\n1\n4\n");
+```
+
+This is the crate's doctest, so `cargo test` runs it.
+
+## Tests
+
+```
+cargo test                             # 33 tests; 2 native ones need x86-64 Linux/Windows + gcc
+```
+
+- `tests/golden.rs`: every `examples/*.ash` declares `// expect:` lines and
+  is run interpreted at -O0 and -O1, and natively at both levels where the
+  host can run x86-64 code. All outputs must equal the expectations, and
+  each runtime trap must give the same message in both backends.
+- `tests/errors.rs`: 36 programs that must fail, each asserting the
+  diagnostic code and the exact `line:col` of the caret.
+- `tests/opt.rs`: IR shape after each pass, same output at -O0 and -O1, and
+  fewer executed IR instructions at -O1 for every example.
+- `tests/fuzz.rs`: 30,000 random token sequences and 5,000 random byte
+  strings must not panic; mutated valid programs must behave the same at
+  -O0 and -O1. Seeds are fixed.
+- `tests/interp.rs`, `tests/limits.rs`, `tests/cli.rs`: recursion depth,
+  nesting limits, and the binary end to end.
+
+On hosts that cannot run x86-64 code the two native golden tests show as
+ignored. CI builds and tests on Linux, Windows and macOS, and on Linux and
+Windows it also runs the examples through `bellows run` at -O0, -O1 and `-g`
+and diffs the output. [`TESTING.md`](TESTING.md) lists what each suite
+covers.
+
+## Benchmarks
+
+`examples/bench.ash` (recursive `fib(30)` plus a 10-million-iteration
+arithmetic loop), Windows 11 laptop, one run each:
+
+| Configuration | Time |
+|---|---|
+| Native, -O1 | 500 ms |
+| Native, -O0 | 500 ms |
+| Interpreter, -O1 | 534 ms |
+| Interpreter, -O0 | 595 ms |
+| Compile `collatz.ash` (all stages, no linking) | 14 ms |
+
+These figures predate the 2026-10 change that moved interpreter calls onto
+an explicit frame stack. On an Apple M-series Mac that change measured
+roughly 15% slower on `bellows interp examples/bench.ash`. The table has not
+been re-measured on the original Windows machine. `tools/bench.sh` reruns
+the comparison on an x86-64 Linux or Windows host.
+
+## Limitations
+
+- Native code only for x86-64 Linux and Windows; no Mach-O, no AArch64.
+- No register allocation; every value lives in the stack frame.
+- The language has no arrays, strings, input or globals yet.
+- Interpreter and native output are compared on the examples and on fuzzed
+  programs, not proven equivalent.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). The main rule is that both
+backends must agree: a semantic change touches `ir::eval` and `codegen.rs`
+and comes with a golden example. Planned work (register allocation, arrays,
+a macOS target, an AArch64 backend, an LSP) is in
+[`ROADMAP.md`](ROADMAP.md). Security reports: [`SECURITY.md`](SECURITY.md).
+Changes are recorded in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 

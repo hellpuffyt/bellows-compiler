@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="t d">
+<title id="t">Bellows compiler pipeline</title>
+<desc id="d">An .ash file goes through lexer.rs, parser.rs, sema.rs, ir.rs lowering and the opt.rs fixpoint optimizer. Lexer, parser and sema errors are rendered by diag.rs. Optimized IR goes either to the ir.rs interpreter (any host) or to codegen.rs, which emits x86-64 assembly that gcc assembles and links into an executable on x86-64 Linux or Windows. Golden tests require both outputs to match at -O0 and -O1.</desc>
+<defs><marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#A3AAA6"/></marker><marker id="ha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3FBF8A"/></marker></defs>
+<rect width="1200" height="500" fill="#0C0D0D"/>
+<rect x="30" y="40" width="120" height="106" rx="8" fill="#17191A" stroke="#2A2E2D" stroke-width="1"/>
+<text x="44" y="64" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" fill="#EEEAE2" text-anchor="start" font-weight="600">prog.ash</text>
+<text x="44" y="86" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">source text</text>
+<rect x="188" y="40" width="150" height="106" rx="8" fill="#17191A" stroke="#2A2E2D" stroke-width="1"/>
+<text x="202" y="64" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" fill="#EEEAE2" text-anchor="start" font-weight="600">lexer.rs</text>
+<text x="202" y="86" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">Token { tok, span }</text>
+<text x="202" y="103" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">nested comments,</text>
+<text x="202" y="120" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">1_000 literals</text>
+<rect x="376" y="40" width="150" height="106" rx="8" fill="#17191A" stroke="#2A2E2D" stroke-width="1"/>
+<text x="390" y="64" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" fill="#EEEAE2" text-anchor="start" font-weight="600">parser.rs</text>
+<text x="390" y="86" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">recursive descent +</text>
+<text x="390" y="103" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">precedence climbing</text>
+<text x="390" y="120" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">→ AST, Expr ids</text>
+<rect x="564" y="40" width="180" height="106" rx="8" fill="#17191A" stroke="#2A2E2D" stroke-width="1"/>
+<text x="578" y="64" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" fill="#EEEAE2" text-anchor="start" font-weight="600">sema.rs</text>
+<text x="578" y="86" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">scopes, i64 / bool / ()</text>
+<text x="578" y="103" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">mutability, arity</text>
+<text x="578" y="120" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">missing-return check</text>
+<rect x="782" y="40" width="160" height="106" rx="8" fill="#17191A" stroke="#2A2E2D" stroke-width="1"/>
+<text x="796" y="64" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" fill="#EEEAE2" text-anchor="start" font-weight="600">ir.rs · lower</text>
+<text x="796" y="86" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">3-address code</text>
+<text x="796" y="103" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">basic blocks, %t temps,</text>
+<text x="796" y="120" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">load/store slots</text>
+<rect x="980" y="40" width="190" height="106" rx="8" fill="#17191A" stroke="#3FBF8A" stroke-width="1.5"/>
+<text x="994" y="64" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" fill="#3FBF8A" text-anchor="start" font-weight="600">opt.rs</text>
+<text x="994" y="86" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">fold, propagate, forward,</text>
+<text x="994" y="103" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">dead temps / stores,</text>
+<text x="994" y="120" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">thread jumps; skipped at -O0</text>
+<path d="M150 93 L186 93" fill="none" stroke="#A3AAA6" stroke-width="1.4" marker-end="url(#h)"/>
+<path d="M338 93 L374 93" fill="none" stroke="#A3AAA6" stroke-width="1.4" marker-end="url(#h)"/>
+<path d="M526 93 L562 93" fill="none" stroke="#A3AAA6" stroke-width="1.4" marker-end="url(#h)"/>
+<path d="M744 93 L780 93" fill="none" stroke="#A3AAA6" stroke-width="1.4" marker-end="url(#h)"/>
+<path d="M942 93 L978 93" fill="none" stroke="#A3AAA6" stroke-width="1.4" marker-end="url(#h)"/>
+<rect x="30" y="210" width="690" height="100" rx="8" fill="#17191A" stroke="#2A2E2D" stroke-width="1"/>
+<text x="44" y="234" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" fill="#EEEAE2" text-anchor="start" font-weight="600">diag.rs</text>
+<text x="44" y="256" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">rustc-style errors: code (E001–E020), file:line:col, source line, caret, label, notes</text>
+<text x="44" y="273" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">any error stops the pipeline; 36 negative tests pin the exact line:col</text>
+<path d="M263 146 L263 208" fill="none" stroke="#A3AAA6" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#h)"/>
+<path d="M451 146 L451 208" fill="none" stroke="#A3AAA6" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#h)"/>
+<path d="M654 146 L654 208" fill="none" stroke="#A3AAA6" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#h)"/>
+<text x="460" y="185" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#A3AAA6" text-anchor="start" font-weight="400">Diagnostic</text>
+<rect x="760" y="210" width="410" height="100" rx="8" fill="#17191A" stroke="#2A2E2D" stroke-width="1"/>
+<text x="774" y="234" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" fill="#EEEAE2" text-anchor="start" font-weight="600">codegen.rs</text>
+<text x="774" y="256" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">x86-64 AT&amp;T asm: System V (linux) or MS x64 (windows)</text>
+<text x="774" y="273" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">checked arithmetic: jo / jz trap → exit 101</text>
+<text x="774" y="290" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">-g emits DWARF .loc line info</text>
+<path d="M1075 146 L1075 208" fill="none" stroke="#A3AAA6" stroke-width="1.4" marker-end="url(#h)"/>
+<text x="1085" y="182" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#A3AAA6" text-anchor="start" font-weight="400">IR</text>
+<path d="M1000 146 L1000 176 L740 176 L740 350 L280 350 L280 378" fill="none" stroke="#A3AAA6" stroke-width="1.4" marker-end="url(#h)"/>
+<text x="505" y="343" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#A3AAA6" text-anchor="middle" font-weight="400">IR</text>
+<rect x="30" y="380" width="500" height="100" rx="8" fill="#17191A" stroke="#3FBF8A" stroke-width="1.5"/>
+<text x="44" y="404" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" fill="#3FBF8A" text-anchor="start" font-weight="600">ir.rs · Interp   (bellows interp)</text>
+<text x="44" y="426" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">runs on any host, including macOS / arm64</text>
+<text x="44" y="443" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">ir::eval: the arithmetic and trap rules codegen mirrors</text>
+<text x="44" y="460" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">explicit frame stack, so deep recursion traps cleanly</text>
+<rect x="760" y="380" width="410" height="100" rx="8" fill="#17191A" stroke="#2A2E2D" stroke-width="1"/>
+<text x="774" y="404" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" fill="#EEEAE2" text-anchor="start" font-weight="600">gcc (or --cc) → executable</text>
+<text x="774" y="426" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">bellows run / build: x86-64 Linux and Windows (MinGW)</text>
+<text x="774" y="443" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#A3AAA6" text-anchor="start" font-weight="400">no Mach-O or AArch64 backend; run refuses on macOS</text>
+<path d="M965 310 L965 378" fill="none" stroke="#A3AAA6" stroke-width="1.4" marker-end="url(#h)"/>
+<text x="975" y="348" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#A3AAA6" text-anchor="start" font-weight="400">assembly .s</text>
+<path d="M534 444 L756 444" fill="none" stroke="#3FBF8A" stroke-width="1.4" stroke-dasharray="5 4" marker-start="url(#ha)" marker-end="url(#ha)"/>
+<text x="645" y="434" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#3FBF8A" text-anchor="middle" font-weight="400">tests/golden.rs</text>
+<text x="645" y="464" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#A3AAA6" text-anchor="middle" font-weight="400">same output at -O0 and -O1</text>
+</svg>
